@@ -45,6 +45,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zflecs = b.dependency("zflecs", .{});
+    exe.root_module.addImport("zflecs", zflecs.module("root"));
+    exe.linkLibrary(zflecs.artifact("flecs"));
+
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);
     exe.root_module.addImport("raygui", raygui);

@@ -2,6 +2,7 @@ const rl = @import("raylib");
 const BoundedArray = @import("std").BoundedArray;
 const print = @import("std").debug.print;
 const fmt = @import("std").fmt;
+const ecs = @import("zflecs");
 
 const vec3 = rl.Vector3;
 
@@ -24,7 +25,22 @@ fn debugLog(comptime fmtstr: []const u8, args: anytype) void {
 var show_iter: usize = 1;
 var debug_draw_count: usize = 0;
 
+const Position = rl.Vector3;
+const Velocity = rl.Vector3;
+
+fn move_system(position: []Position, velocities: []const Velocity) void {
+    for (position, velocities) |*p, v| {
+        p.* = p.*.add(v);
+    }
+}
+
 pub fn main() anyerror!void {
+    const world = ecs.init();
+    defer _ = ecs.fini(world);
+
+    ecs.COMPONENT(world, Position);
+
+    ecs.ADD_SYSTEM(world, "move system", ecs.OnUpdate, move_system);
     // Initialization
     //--------------------------------------------------------------------------------------
     const screenWidth = 800;
@@ -108,9 +124,9 @@ pub fn main() anyerror!void {
             defer camera.end();
 
             const r = gjk(
+                cube_pos,
                 Collider{
-                    .pos = cube_pos,
-                    .shape = .{ .mesh = .{ .verts = &.{
+                    .mesh = .{ .verts = &.{
                         vec3.init(1, 1, 1),
                         vec3.init(1, 1, -1),
                         vec3.init(1, -1, 1),
@@ -119,11 +135,11 @@ pub fn main() anyerror!void {
                         vec3.init(-1, 1, -1),
                         vec3.init(-1, -1, 1),
                         vec3.init(-1, -1, -1),
-                    } } },
+                    } },
                 },
+                spheres[0].pos,
                 Collider{
-                    .pos = spheres[0].pos,
-                    .shape = .{ .sphere = .{ .radius = spheres[0].radius } },
+                    .sphere = .{ .radius = spheres[0].radius },
                 },
             );
             print("{}\n", .{r});
@@ -142,18 +158,18 @@ pub fn main() anyerror!void {
 }
 
 var gjk_points = BoundedArray(vec3, 64).init(0) catch unreachable;
-fn gjk(collider_a: Collider, collider_b: Collider) bool {
+fn gjk(a_pos: vec3, collider_a: Collider, b_pos: vec3, collider_b: Collider) bool {
     // ref: https://winter.dev/articles/gjk-algorithm
     // ref: https://gist.github.com/vurtun/29727217c269a2fbf4c0ed9a1d11cb40
     var v = vec3.init(1, 0, 0);
-    var a = collider_a.support(v).sub(collider_b.support(v.mul(-1)));
+    var a = collider_a.support(a_pos, v).sub(collider_b.support(b_pos, v.mul(-1)));
     var simplex = Simplex.new(&.{a});
     var d = a.mul(-1).normalize();
 
     gjk_points.append(a) catch {};
 
-    rl.drawSphere(collider_a.support(v), 0.1, rl.Color.green);
-    rl.drawSphere(collider_b.support(v.mul(-1)), 0.1, rl.Color.green);
+    rl.drawSphere(collider_a.support(a_pos, v), 0.1, rl.Color.green);
+    rl.drawSphere(collider_b.support(b_pos, v.mul(-1)), 0.1, rl.Color.green);
 
     var i: usize = 0;
 
@@ -161,12 +177,12 @@ fn gjk(collider_a: Collider, collider_b: Collider) bool {
 
     for (0..10) |_| {
         i += 1;
-        a = collider_a.support(d).sub(collider_b.support(d.mul(-1)));
+        a = collider_a.support(a_pos, d).sub(collider_b.support(b_pos, d.mul(-1)));
 
         gjk_points.append(a) catch {};
 
-        rl.drawSphere(collider_a.support(d.normalize()), 0.1, rl.Color.green);
-        rl.drawSphere(collider_b.support(d.mul(-1).normalize()), 0.1, rl.Color.green);
+        rl.drawSphere(collider_a.support(a_pos, d.normalize()), 0.1, rl.Color.green);
+        rl.drawSphere(collider_b.support(b_pos, d.mul(-1).normalize()), 0.1, rl.Color.green);
         if (a.dot(d) < 0) {
             return false;
         }
@@ -180,7 +196,7 @@ fn gjk(collider_a: Collider, collider_b: Collider) bool {
 
     debugLog("iters: {}\n", .{i});
 
-    //print("shouldn't get here", .{});
+    print("shouldn't get here", .{});
     return false;
 }
 
@@ -189,16 +205,13 @@ const ColliderType = enum {
     mesh,
 };
 
-const Collider = struct {
-    pos: vec3,
-    shape: union(ColliderType) {
-        sphere: struct { radius: f32 },
-        mesh: struct { verts: []const vec3 },
-    },
+const Collider = union(ColliderType) {
+    sphere: struct { radius: f32 },
+    mesh: struct { verts: []const vec3 },
 
     const Self = @This();
-    fn support(self: Self, dir: vec3) vec3 {
-        const point = switch (self.shape) {
+    fn support(self: Self, pos: vec3, dir: vec3) vec3 {
+        const point = switch (self) {
             ColliderType.sphere => |s| dir.mul(s.radius),
             ColliderType.mesh => |m| lbl: {
                 var max = m.verts[0];
@@ -213,7 +226,7 @@ const Collider = struct {
                 break :lbl max;
             },
         };
-        return self.pos.add(point);
+        return pos.add(point);
     }
 };
 
