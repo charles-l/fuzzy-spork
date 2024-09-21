@@ -1,10 +1,16 @@
-const rl = @import("raylib");
-const BoundedArray = @import("std").BoundedArray;
-const print = @import("std").debug.print;
-const fmt = @import("std").fmt;
-const ecs = @import("zflecs");
+const std = @import("std");
+const BoundedArray = std.BoundedArray;
+const print = std.debug.print;
+const fmt = std.fmt;
+const gjk = @import("gjk.zig");
 
-const vec3 = rl.Vector3;
+const rl = @import("raylib");
+const ecs = @import("zigecs");
+const ziglua = @import("ziglua");
+
+const Lua = ziglua.Lua;
+
+const vec3 = gjk.vec3;
 
 const FrameLog = struct {
     buf: [1024]u8,
@@ -17,30 +23,89 @@ fn clearFrameLog() void {
     frame_log.offset = 0;
 }
 
-fn debugLog(comptime fmtstr: []const u8, args: anytype) void {
+fn debug_log(comptime fmtstr: []const u8, args: anytype) void {
     const s = fmt.bufPrint(frame_log.buf[frame_log.offset..], fmtstr, args) catch "";
     frame_log.offset += s.len;
 }
 
-var show_iter: usize = 1;
+var show_iter: usize = 10;
 var debug_draw_count: usize = 0;
 
 const Position = rl.Vector3;
-const Velocity = rl.Vector3;
 
-fn move_system(position: []Position, velocities: []const Velocity) void {
-    for (position, velocities) |*p, v| {
-        p.* = p.*.add(v);
+fn debug_draw_simplex(self: gjk.Simplex) void {
+    for (self.points.slice()) |p| {
+        rl.drawSphere(@bitCast(p), 0.05, rl.Color.blue);
+    }
+    for (0..self.points.len) |i| {
+        for (0..self.points.len) |j| {
+            if (i == j) {
+                continue;
+            }
+
+            rl.drawLine3D(@bitCast(self.points.get(i)), @bitCast(self.points.get(j)), rl.Color.blue);
+        }
+    }
+}
+
+fn collision_system(positions: []Position, colliders: []gjk.Collider) void {
+    for (positions, colliders, 0..) |pos1, col1, i| {
+        for (positions[i + 1 ..], colliders[i + 1 ..]) |pos2, col2| {
+            const r = gjk(pos1, col1, pos2, col2);
+            if (r) {
+                print("collisions\n", .{});
+            }
+        }
     }
 }
 
 pub fn main() anyerror!void {
-    const world = ecs.init();
-    defer _ = ecs.fini(world);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
-    ecs.COMPONENT(world, Position);
+    var lua = try Lua.init(&allocator);
+    defer lua.deinit();
 
-    ecs.ADD_SYSTEM(world, "move system", ecs.OnUpdate, move_system);
+    var reg = ecs.Registry.init(allocator);
+    defer reg.deinit();
+
+    // pos1 = .{.x=32769.0, .y=0.0, .z=0.0}, rad1 = 0.001953125, pos2 = .{.x=32769.0, .y=0.0, .z=0.0}, rad2 = 0.001953125
+
+    const spherePos = Position{ .x = 32769.0, .y = 0.0, .z = 0.0 };
+    const sphere = reg.create();
+    {
+        reg.add(sphere, spherePos);
+        reg.add(sphere, gjk.Collider{
+            .sphere = .{ .radius = 0.1 },
+        });
+    }
+
+    const sphere2 = reg.create();
+    {
+        reg.add(sphere2, Position{ .x = 32769.0, .y = 0.0, .z = 0.0 });
+        reg.add(sphere2, gjk.Collider{
+            .sphere = .{ .radius = 0.1 },
+        });
+    }
+
+    //const cube = reg.create();
+    //{
+    //    reg.add(cube, Position.init(0, 1, 0));
+    //    reg.add(cube, gjk.Collider{
+    //        .mesh = .{ .verts = &.{
+    //            vec3.init(1, 1, 1),
+    //            vec3.init(1, 1, -1),
+    //            vec3.init(1, -1, 1),
+    //            vec3.init(1, -1, -1),
+    //            vec3.init(-1, 1, 1),
+    //            vec3.init(-1, 1, -1),
+    //            vec3.init(-1, -1, 1),
+    //            vec3.init(-1, -1, -1),
+    //        } },
+    //    });
+    //}
+
     // Initialization
     //--------------------------------------------------------------------------------------
     const screenWidth = 800;
@@ -54,6 +119,14 @@ pub fn main() anyerror!void {
     rl.setTargetFPS(60); // Set our game to run at 60 frames-per-second
 
     var camera = rl.Camera3D{
+        .position = spherePos.add(rl.Vector3.init(4, 2, 4)),
+        .target = spherePos,
+        .up = rl.Vector3.init(0, 1, 0),
+        .fovy = 60,
+        .projection = rl.CameraProjection.camera_perspective,
+    };
+
+    const origin_cam = rl.Camera3D{
         .position = rl.Vector3.init(4, 2, 4),
         .target = rl.Vector3.init(0, 0, 0),
         .up = rl.Vector3.init(0, 1, 0),
@@ -61,42 +134,28 @@ pub fn main() anyerror!void {
         .projection = rl.CameraProjection.camera_perspective,
     };
 
-    const Sphere = struct {
-        pos: rl.Vector3,
-        radius: f32,
-    };
-
-    var spheres = [_]Sphere{
-    //.{
-    //    .pos = rl.Vector3.zero(),
-    //    .radius = 1,
-    //},
-    .{
-        .pos = rl.Vector3.init(0, 0, 3),
-        .radius = 1,
-    }};
-
-    const cube_pos = rl.Vector3.init(0, 3, 0);
+    //const cube_pos = rl.Vector3.init(0, 3, 0);
 
     //--------------------------------------------------------------------------------------
 
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
+        var view = reg.view(.{ Position, gjk.Collider }, .{});
         camera.update(rl.CameraMode.camera_free);
 
-        if (rl.isKeyPressed(.key_z)) camera.target = rl.Vector3{ .x = 0, .y = 0, .z = 0 };
+        if (rl.isKeyPressed(.key_z)) camera.target = spherePos;
 
         if (rl.isKeyDown(.key_l)) {
-            spheres[0].pos.z += 0.1;
+            view.get(Position, sphere).z += 0.1;
         }
         if (rl.isKeyDown(.key_h)) {
-            spheres[0].pos.z -= 0.1;
+            view.get(Position, sphere).z -= 0.1;
         }
         if (rl.isKeyDown(.key_j)) {
-            spheres[0].pos.y += 0.1;
+            view.get(Position, sphere).y += 0.1;
         }
         if (rl.isKeyDown(.key_k)) {
-            spheres[0].pos.y -= 0.1;
+            view.get(Position, sphere).y -= 0.1;
         }
 
         if (rl.isKeyReleased(.key_left_bracket)) {
@@ -111,243 +170,50 @@ pub fn main() anyerror!void {
         rl.beginDrawing();
         defer rl.endDrawing();
         defer clearFrameLog();
-        defer {
-            gjk_points.resize(0) catch unreachable;
-            print("{}\n", .{debug_draw_count});
-            debug_draw_count = 0;
-        }
 
         rl.clearBackground(rl.Color.white);
 
         {
-            camera.begin();
-            defer camera.end();
-
-            const r = gjk(
-                cube_pos,
-                Collider{
-                    .mesh = .{ .verts = &.{
-                        vec3.init(1, 1, 1),
-                        vec3.init(1, 1, -1),
-                        vec3.init(1, -1, 1),
-                        vec3.init(1, -1, -1),
-                        vec3.init(-1, 1, 1),
-                        vec3.init(-1, 1, -1),
-                        vec3.init(-1, -1, 1),
-                        vec3.init(-1, -1, -1),
-                    } },
-                },
-                spheres[0].pos,
-                Collider{
-                    .sphere = .{ .radius = spheres[0].radius },
-                },
-            );
-            print("{}\n", .{r});
+            const cam = if (rl.isKeyDown(.key_z)) origin_cam else camera;
+            cam.begin();
+            defer cam.end();
 
             rl.drawGrid(10, 1);
 
-            rl.drawCube(cube_pos, 2, 2, 2, rl.Color.gray);
-            for (spheres) |s| {
-                rl.drawSphere(s.pos, s.radius, rl.Color.red.fade(if (r) 0.3 else 1));
+            {
+                const positions = reg.raw(Position);
+                const colliders = reg.raw(gjk.Collider);
+                for (positions, colliders, 0..) |pos1, col1, i| {
+                    for (positions[i + 1 ..], colliders[i + 1 ..]) |pos2, col2| {
+                        const r = gjk.gjk_inner(@bitCast(pos1), col1, @bitCast(pos2), col2, show_iter);
+                        if (r.collision) {
+                            debug_log("collisions\n", .{});
+                            debug_draw_simplex(r.simplex);
+                        }
+                    }
+                }
+            }
+
+            //rl.drawCube(cube_pos, 2, 2, 2, rl.Color.gray);
+            //for (spheres) |s| {
+            //    //rl.drawSphere(s.pos, s.radius, rl.Color.red.fade(if (r) 0.3 else 1));
+            //}
+            //
+            {
+                var it = view.entityIterator();
+                while (it.next()) |e| {
+                    const position = view.getConst(Position, e);
+                    switch (view.getConst(gjk.Collider, e)) {
+                        gjk.Collider.sphere => |s| {
+                            rl.drawSphere(position, s.radius, rl.Color.purple);
+                        },
+                        else => {},
+                    }
+                }
             }
         }
 
         frame_log.buf[frame_log.offset] = 0;
         rl.drawText(frame_log.buf[0..frame_log.offset :0], 10, 10, 20, rl.Color.gray);
-    }
-}
-
-var gjk_points = BoundedArray(vec3, 64).init(0) catch unreachable;
-fn gjk(a_pos: vec3, collider_a: Collider, b_pos: vec3, collider_b: Collider) bool {
-    // ref: https://winter.dev/articles/gjk-algorithm
-    // ref: https://gist.github.com/vurtun/29727217c269a2fbf4c0ed9a1d11cb40
-    var v = vec3.init(1, 0, 0);
-    var a = collider_a.support(a_pos, v).sub(collider_b.support(b_pos, v.mul(-1)));
-    var simplex = Simplex.new(&.{a});
-    var d = a.mul(-1).normalize();
-
-    gjk_points.append(a) catch {};
-
-    rl.drawSphere(collider_a.support(a_pos, v), 0.1, rl.Color.green);
-    rl.drawSphere(collider_b.support(b_pos, v.mul(-1)), 0.1, rl.Color.green);
-
-    var i: usize = 0;
-
-    simplex.debug_draw();
-
-    for (0..10) |_| {
-        i += 1;
-        a = collider_a.support(a_pos, d).sub(collider_b.support(b_pos, d.mul(-1)));
-
-        gjk_points.append(a) catch {};
-
-        rl.drawSphere(collider_a.support(a_pos, d.normalize()), 0.1, rl.Color.green);
-        rl.drawSphere(collider_b.support(b_pos, d.mul(-1).normalize()), 0.1, rl.Color.green);
-        if (a.dot(d) < 0) {
-            return false;
-        }
-        simplex.add(a);
-        const contains_origin = next_simplex(&simplex, &d);
-        d = d.normalize();
-        if (contains_origin) {
-            return true;
-        }
-    }
-
-    debugLog("iters: {}\n", .{i});
-
-    print("shouldn't get here", .{});
-    return false;
-}
-
-const ColliderType = enum {
-    sphere,
-    mesh,
-};
-
-const Collider = union(ColliderType) {
-    sphere: struct { radius: f32 },
-    mesh: struct { verts: []const vec3 },
-
-    const Self = @This();
-    fn support(self: Self, pos: vec3, dir: vec3) vec3 {
-        const point = switch (self) {
-            ColliderType.sphere => |s| dir.mul(s.radius),
-            ColliderType.mesh => |m| lbl: {
-                var max = m.verts[0];
-                var max_dot = m.verts[0].dot(dir);
-                for (m.verts[1..]) |v| {
-                    const dot = v.dot(dir);
-                    if (dot > max_dot) {
-                        max = v;
-                        max_dot = dot;
-                    }
-                }
-                break :lbl max;
-            },
-        };
-        return pos.add(point);
-    }
-};
-
-const Simplex = struct {
-    points: BoundedArray(vec3, 4),
-
-    const Self = @This();
-
-    fn new(vs: []const vec3) Self {
-        return Self{ .points = BoundedArray(vec3, 4).fromSlice(vs) catch unreachable };
-    }
-
-    fn add(self: *Self, v: vec3) void {
-        self.points.insert(0, v) catch @panic("too many points");
-    }
-
-    fn debug_draw(self: Self) void {
-        debug_draw_count += 1;
-        if (debug_draw_count == show_iter) {
-            for (self.points.slice()) |p| {
-                rl.drawSphere(p, 0.05, rl.Color.blue);
-            }
-            for (0..self.points.len) |i| {
-                for (0..self.points.len) |j| {
-                    if (i == j) {
-                        continue;
-                    }
-
-                    rl.drawLine3D(self.points.get(i), self.points.get(j), rl.Color.blue);
-                }
-            }
-        }
-    }
-};
-
-fn next_simplex(simplex: *Simplex, dir: *vec3) bool {
-    simplex.debug_draw();
-    switch (simplex.points.len) {
-        2 => {
-            debugLog("line\n", .{});
-            const a = simplex.points.get(0);
-            const b = simplex.points.get(1);
-
-            const ab = b.sub(a);
-            const ao = a.mul(-1);
-            if (ab.dot(ao) > 0) {
-                dir.* = ab.cross(ao).cross(ab);
-            } else {
-                simplex.* = Simplex.new(&.{a});
-                dir.* = ao;
-            }
-
-            return false;
-        },
-        3 => {
-            debugLog("tri\n", .{});
-            const a = simplex.points.get(0);
-            const b = simplex.points.get(1);
-            const c = simplex.points.get(2);
-
-            const ab = b.sub(a);
-            const ac = c.sub(a);
-            const ao = a.mul(-1);
-
-            const abc = ab.cross(ac);
-            if (abc.cross(ac).dot(ao) > 0) {
-                if (ac.dot(ao) > 0) {
-                    simplex.* = Simplex.new(&.{ a, c });
-                    dir.* = ac.cross(ao).cross(ac);
-                } else {
-                    simplex.* = Simplex.new(&.{ a, b });
-                    return next_simplex(simplex, dir);
-                }
-            } else {
-                if (ab.cross(abc).dot(ao) > 0) {
-                    simplex.* = Simplex.new(&.{ a, b });
-                    return next_simplex(simplex, dir);
-                } else {
-                    if (abc.dot(ao) > 0) {
-                        dir.* = abc;
-                    } else {
-                        simplex.* = Simplex.new(&.{ a, c, b });
-                        dir.* = abc.mul(-1);
-                    }
-                }
-            }
-            return false;
-        },
-        4 => {
-            const a = simplex.points.get(0);
-            const b = simplex.points.get(1);
-            const c = simplex.points.get(2);
-            const d = simplex.points.get(3);
-            debugLog("simplex\n {}\n {}\n {}\n {}\n", .{ a, b, c, d });
-
-            const ab = b.sub(a);
-            const ac = c.sub(a);
-            const ad = d.sub(a);
-            const ao = a.mul(-1);
-
-            const abc = ab.cross(ac);
-            const acd = ac.cross(ad);
-            const adb = ad.cross(ab);
-
-            if (abc.dot(ao) > 0) {
-                simplex.* = Simplex.new(&.{ a, b, c });
-                return next_simplex(simplex, dir);
-            }
-
-            if (acd.dot(ao) > 0) {
-                simplex.* = Simplex.new(&.{ a, c, d });
-                return next_simplex(simplex, dir);
-            }
-
-            if (adb.dot(ao) > 0) {
-                simplex.* = Simplex.new(&.{ a, d, b });
-                return next_simplex(simplex, dir);
-            }
-
-            return true;
-        },
-        else => unreachable,
     }
 }

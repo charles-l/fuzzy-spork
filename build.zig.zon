@@ -27,7 +27,14 @@
             .url = "https://github.com/Not-Nik/raylib-zig/archive/devel.tar.gz",
             .hash = "1220fc554f109a45a77ee5c58b4a847936dc0b24dcbed818b65a02de1b58500041dc",
         },
-        .zflecs = .{ .path = "libs/zflecs" },
+        .ziglua = .{
+            .url = "git+https://github.com/natecraddock/ziglua#74796808b5bf7c81bf6f1e1b48d97ad01f87ec45",
+            .hash = "122094a86e7171946ec9dc47ea22c4782511c26ae555a7e79e315ae857ccce15cfa5",
+        },
+        .entt = .{
+            .url = "git+https://github.com/prime31/zig-ecs#b47670da5fc32ec200d63bb0b0a6c93640fca602",
+            .hash = "1220949709178b133c4d7f6ddf87fa575a9f2e9afe545a39aafdc8c89e6abbe83412",
+        },
     },
     .paths = .{
         "build.zig",

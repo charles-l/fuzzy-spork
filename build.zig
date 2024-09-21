@@ -24,11 +24,21 @@ pub fn build(b: *std.Build) void {
     const raygui = raylib_dep.module("raygui"); // raygui module
     const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
 
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addSharedLibrary(.{
         .name = "gjk",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("src/gjk.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const ziglua = b.dependency("ziglua", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const ecs = b.dependency("entt", .{
         .target = target,
         .optimize = optimize,
     });
@@ -45,9 +55,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const zflecs = b.dependency("zflecs", .{});
-    exe.root_module.addImport("zflecs", zflecs.module("root"));
-    exe.linkLibrary(zflecs.artifact("flecs"));
+    exe.root_module.addImport("ziglua", ziglua.module("ziglua"));
+    exe.root_module.addImport("zigecs", ecs.module("zig-ecs"));
 
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);
