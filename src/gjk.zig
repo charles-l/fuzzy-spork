@@ -46,7 +46,7 @@ export fn gjk_spheres(a_pos: vec3, a_rad: f32, b_pos: vec3, b_rad: f32) bool {
 }
 
 pub fn gjk(a_pos: vec3, collider_a: Collider, b_pos: vec3, collider_b: Collider) bool {
-    return gjk_inner(a_pos, collider_a, b_pos, collider_b, 10).collision;
+    return gjk_inner(a_pos, collider_a, b_pos, collider_b, 24).collision;
 }
 
 pub fn gjk_inner(a_pos: vec3, collider_a: Collider, b_pos: vec3, collider_b: Collider, iters: usize) struct { collision: bool, simplex: Simplex } {
@@ -74,7 +74,7 @@ pub fn gjk_inner(a_pos: vec3, collider_a: Collider, b_pos: vec3, collider_b: Col
         }
     }
 
-    std.debug.print("shouldn't get here\n", .{});
+    std.debug.print("shouldn't get here.\n", .{});
     return .{ .collision = false, .simplex = simplex };
 }
 

@@ -38,11 +38,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const ecs = b.dependency("entt", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
@@ -56,7 +51,6 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("ziglua", ziglua.module("ziglua"));
-    exe.root_module.addImport("zigecs", ecs.module("zig-ecs"));
 
     exe.linkLibrary(raylib_artifact);
     exe.root_module.addImport("raylib", raylib);

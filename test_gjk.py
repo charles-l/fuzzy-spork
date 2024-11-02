@@ -25,9 +25,9 @@ vec3 = st.tuples(st.floats(), st.floats(), st.floats())
 def vec3s(draw):
     x, y, z = draw(
         st.tuples(
-            st.floats(min_value=-1000, max_value=1000),
-            st.floats(min_value=-1000, max_value=1000),
-            st.floats(min_value=-1000, max_value=1000),
+            st.floats(min_value=-10000, max_value=10000),
+            st.floats(min_value=-10000, max_value=10000),
+            st.floats(min_value=-10000, max_value=10000),
         )
     )
     return Vec3(x, y, z)

@@ -28,10 +28,28 @@ fn debug_log(comptime fmtstr: []const u8, args: anytype) void {
     frame_log.offset += s.len;
 }
 
-var show_iter: usize = 10;
+var show_iter: usize = 11;
 var debug_draw_count: usize = 0;
 
-const Position = rl.Vector3;
+const Entity = struct {
+    active: bool,
+
+    position: rl.Vector3,
+    scale: rl.Vector3,
+    rotation: rl.Quaternion,
+    collider: gjk.Collider,
+
+    const Self = @This();
+    fn fromPosition(position: rl.Vector3) Self {
+        return std.mem.zeroInit(Self, .{
+            .active = true,
+            .position = position,
+            .scale = .{ .x = 1, .y = 1, .z = 1 },
+            .rotation = rl.Quaternion.identity(),
+            .collider = .{ .sphere = .{ .radius = 0 } },
+        });
+    }
+};
 
 fn debug_draw_simplex(self: gjk.Simplex) void {
     for (self.points.slice()) |p| {
@@ -48,15 +66,25 @@ fn debug_draw_simplex(self: gjk.Simplex) void {
     }
 }
 
-fn collision_system(positions: []Position, colliders: []gjk.Collider) void {
-    for (positions, colliders, 0..) |pos1, col1, i| {
-        for (positions[i + 1 ..], colliders[i + 1 ..]) |pos2, col2| {
-            const r = gjk(pos1, col1, pos2, col2);
-            if (r) {
-                print("collisions\n", .{});
+const max_entities = 16;
+var entities = [_]Entity{std.mem.zeroInit(Entity, .{ .collider = .{ .sphere = .{ .radius = 0 } } })} ** max_entities;
+
+const EntityIter = struct {
+    i: usize,
+
+    fn next(self: *@This()) ?*Entity {
+        while (self.i < max_entities) {
+            defer self.i += 1;
+            if (entities[self.i].active) {
+                return &entities[self.i];
             }
         }
+        return null;
     }
+};
+
+fn entityIter() EntityIter {
+    return .{ .i = 0 };
 }
 
 pub fn main() anyerror!void {
@@ -67,27 +95,11 @@ pub fn main() anyerror!void {
     var lua = try Lua.init(&allocator);
     defer lua.deinit();
 
-    var reg = ecs.Registry.init(allocator);
-    defer reg.deinit();
+    entities[0] = Entity.fromPosition(.{ .x = 0, .y = 0, .z = 0 });
+    entities[0].collider = gjk.Collider{ .sphere = .{ .radius = 791 } };
 
-    // pos1 = .{.x=32769.0, .y=0.0, .z=0.0}, rad1 = 0.001953125, pos2 = .{.x=32769.0, .y=0.0, .z=0.0}, rad2 = 0.001953125
-
-    const spherePos = Position{ .x = 32769.0, .y = 0.0, .z = 0.0 };
-    const sphere = reg.create();
-    {
-        reg.add(sphere, spherePos);
-        reg.add(sphere, gjk.Collider{
-            .sphere = .{ .radius = 0.1 },
-        });
-    }
-
-    const sphere2 = reg.create();
-    {
-        reg.add(sphere2, Position{ .x = 32769.0, .y = 0.0, .z = 0.0 });
-        reg.add(sphere2, gjk.Collider{
-            .sphere = .{ .radius = 0.1 },
-        });
-    }
+    entities[1] = Entity.fromPosition(.{ .x = 0, .y = 3, .z = 791 });
+    entities[1].collider = gjk.Collider{ .sphere = .{ .radius = 0.5 } };
 
     //const cube = reg.create();
     //{
@@ -119,8 +131,8 @@ pub fn main() anyerror!void {
     rl.setTargetFPS(60); // Set our game to run at 60 frames-per-second
 
     var camera = rl.Camera3D{
-        .position = spherePos.add(rl.Vector3.init(4, 2, 4)),
-        .target = spherePos,
+        .position = entities[0].position.add(rl.Vector3.init(4, 2, 4)),
+        .target = entities[0].position,
         .up = rl.Vector3.init(0, 1, 0),
         .fovy = 60,
         .projection = rl.CameraProjection.camera_perspective,
@@ -140,22 +152,21 @@ pub fn main() anyerror!void {
 
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-        var view = reg.view(.{ Position, gjk.Collider }, .{});
         camera.update(rl.CameraMode.camera_free);
 
-        if (rl.isKeyPressed(.key_z)) camera.target = spherePos;
+        if (rl.isKeyPressed(.key_z)) camera.target = entities[0].position;
 
         if (rl.isKeyDown(.key_l)) {
-            view.get(Position, sphere).z += 0.1;
+            entities[1].position.z += 0.1;
         }
         if (rl.isKeyDown(.key_h)) {
-            view.get(Position, sphere).z -= 0.1;
+            entities[1].position.z -= 0.1;
         }
         if (rl.isKeyDown(.key_j)) {
-            view.get(Position, sphere).y += 0.1;
+            entities[1].position.y += 0.1;
         }
         if (rl.isKeyDown(.key_k)) {
-            view.get(Position, sphere).y -= 0.1;
+            entities[1].position.y -= 0.1;
         }
 
         if (rl.isKeyReleased(.key_left_bracket)) {
@@ -181,31 +192,27 @@ pub fn main() anyerror!void {
             rl.drawGrid(10, 1);
 
             {
-                const positions = reg.raw(Position);
-                const colliders = reg.raw(gjk.Collider);
-                for (positions, colliders, 0..) |pos1, col1, i| {
-                    for (positions[i + 1 ..], colliders[i + 1 ..]) |pos2, col2| {
-                        const r = gjk.gjk_inner(@bitCast(pos1), col1, @bitCast(pos2), col2, show_iter);
+                var iter1 = entityIter();
+                while (iter1.next()) |entity1| {
+                    var iter2 = EntityIter{ .i = iter1.i };
+                    while (iter2.next()) |entity2| {
+                        const r = gjk.gjk_inner(@bitCast(entity1.position), entity1.collider, @bitCast(entity2.position), entity2.collider, show_iter);
+                        debug_draw_simplex(r.simplex);
+                        debug_log("iters={}\n", .{show_iter});
                         if (r.collision) {
                             debug_log("collisions\n", .{});
-                            debug_draw_simplex(r.simplex);
+                            //debug_draw_simplex(r.simplex);
                         }
                     }
                 }
             }
 
-            //rl.drawCube(cube_pos, 2, 2, 2, rl.Color.gray);
-            //for (spheres) |s| {
-            //    //rl.drawSphere(s.pos, s.radius, rl.Color.red.fade(if (r) 0.3 else 1));
-            //}
-            //
             {
-                var it = view.entityIterator();
+                var it = entityIter();
                 while (it.next()) |e| {
-                    const position = view.getConst(Position, e);
-                    switch (view.getConst(gjk.Collider, e)) {
+                    switch (e.collider) {
                         gjk.Collider.sphere => |s| {
-                            rl.drawSphere(position, s.radius, rl.Color.purple);
+                            rl.drawSphere(e.position, s.radius, rl.Color.purple);
                         },
                         else => {},
                     }
