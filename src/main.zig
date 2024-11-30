@@ -5,7 +5,6 @@ const fmt = std.fmt;
 const gjk = @import("gjk.zig");
 
 const rl = @import("raylib");
-const ecs = @import("zigecs");
 const ziglua = @import("ziglua");
 
 const Lua = ziglua.Lua;
@@ -146,6 +145,21 @@ pub fn main() anyerror!void {
         .projection = rl.CameraProjection.camera_perspective,
     };
 
+    var rnd = std.rand.DefaultPrng.init(7);
+    const random_points = lbl: {
+        var r: [10]vec3 = undefined;
+
+        for (0..r.len) |i| {
+            r[i] = gjk.vec3.init(
+                (rnd.random().float(f32) - 0.5) * 5,
+                (rnd.random().float(f32) - 0.5) * 5,
+                (rnd.random().float(f32) - 0.5) * 5,
+            );
+        }
+
+        break :lbl r;
+    };
+
     //const cube_pos = rl.Vector3.init(0, 3, 0);
 
     //--------------------------------------------------------------------------------------
@@ -191,7 +205,28 @@ pub fn main() anyerror!void {
 
             rl.drawGrid(10, 1);
 
-            {
+            for (random_points) |p| {
+                rl.drawSphere(@bitCast(p), 0.1, rl.Color.dark_blue);
+            }
+
+            const maybe_hull = try gjk.quickhull(allocator, &random_points);
+
+            if (maybe_hull) |hull| {
+                var i: usize = 0;
+                while (i < hull.faces.len) : (i += 1) {
+                    const p1 = hull.verts[hull.faces[i][0]];
+                    const p2 = hull.verts[hull.faces[i][1]];
+                    const p3 = hull.verts[hull.faces[i][2]];
+                    rl.drawLine3D(@bitCast(p1), @bitCast(p2), rl.Color.blue);
+                    rl.drawLine3D(@bitCast(p1), @bitCast(p3), rl.Color.blue);
+                    rl.drawLine3D(@bitCast(p2), @bitCast(p3), rl.Color.blue);
+                }
+
+                allocator.free(hull.verts);
+                allocator.free(hull.faces);
+            }
+
+            if (false) {
                 var iter1 = entityIter();
                 while (iter1.next()) |entity1| {
                     var iter2 = EntityIter{ .i = iter1.i };
@@ -200,6 +235,8 @@ pub fn main() anyerror!void {
                         debug_draw_simplex(r.simplex);
                         debug_log("iters={}\n", .{show_iter});
                         if (r.collision) {
+                            //const er = gjk.epa(r.simplex, @bitCast(entity1.position), entity1.collider, @bitCast(entity2.position), entity2.collider);
+                            //print("{}\n", .{er});
                             debug_log("collisions\n", .{});
                             //debug_draw_simplex(r.simplex);
                         }
@@ -207,7 +244,7 @@ pub fn main() anyerror!void {
                 }
             }
 
-            {
+            if (false) {
                 var it = entityIter();
                 while (it.next()) |e| {
                     switch (e.collider) {
