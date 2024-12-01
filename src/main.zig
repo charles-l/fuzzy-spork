@@ -145,9 +145,9 @@ pub fn main() anyerror!void {
         .projection = rl.CameraProjection.camera_perspective,
     };
 
-    var rnd = std.rand.DefaultPrng.init(7);
+    var rnd = std.rand.DefaultPrng.init(1);
     const random_points = lbl: {
-        var r: [10]vec3 = undefined;
+        var r: [20]vec3 = undefined;
 
         for (0..r.len) |i| {
             r[i] = gjk.vec3.init(
@@ -164,6 +164,7 @@ pub fn main() anyerror!void {
 
     //--------------------------------------------------------------------------------------
 
+    rl.disableCursor();
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
         camera.update(rl.CameraMode.camera_free);
@@ -210,21 +211,12 @@ pub fn main() anyerror!void {
             }
 
             const maybe_hull = try gjk.quickhull(allocator, &random_points);
-
             if (maybe_hull) |hull| {
-                var i: usize = 0;
-                while (i < hull.faces.len) : (i += 1) {
-                    const p1 = hull.verts[hull.faces[i][0]];
-                    const p2 = hull.verts[hull.faces[i][1]];
-                    const p3 = hull.verts[hull.faces[i][2]];
-                    rl.drawLine3D(@bitCast(p1), @bitCast(p2), rl.Color.blue);
-                    rl.drawLine3D(@bitCast(p1), @bitCast(p3), rl.Color.blue);
-                    rl.drawLine3D(@bitCast(p2), @bitCast(p3), rl.Color.blue);
-                }
-
                 allocator.free(hull.verts);
                 allocator.free(hull.faces);
             }
+
+            @import("debug.zig").debugDraw();
 
             if (false) {
                 var iter1 = entityIter();

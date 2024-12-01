@@ -115,7 +115,7 @@ fn addIfUniqueEdge(
 }
 
 const Polytope = struct {
-    verts: []vec3,
+    verts: []const vec3,
     faces: [][3]usize,
 };
 
@@ -186,29 +186,26 @@ const TriMesh = struct {
     const HalfEdge = struct {
         vertex: usize,
         face: usize,
-        next: usize,
-        opposite: ?usize,
+        next: [2]usize,
+        opposite: ?[2]usize,
     };
 
     allocator: std.mem.Allocator,
-    halfedges: std.ArrayList(HalfEdge),
-    vertices: std.ArrayList(vec3),
+    vertices: []const vec3,
     faces: std.ArrayList(Face),
 
     // map edge (vertex indices) to HalfeEdge
-    hemap: std.AutoHashMap([2]usize, usize),
+    hemap: std.AutoHashMap([2]usize, HalfEdge),
 
     const Self = @This();
 
     fn deinit(self: *Self) void {
         self.hemap.deinit();
-        self.halfedges.deinit();
         self.faces.deinit();
-        self.vertices.deinit();
+        //self.allocator.free(self.vertices);
     }
 
     fn addFace(self: *Self, verts: [3]usize) !void {
-        std.debug.print("add_face {any}\n", .{verts});
         std.debug.assert(new_face: {
             for (self.faces.items, 0..) |face, i| {
                 if (std.meta.eql(face, verts)) {
@@ -219,44 +216,38 @@ const TriMesh = struct {
             break :new_face true;
         });
         const face_id = self.faces.items.len;
-        const base_halfedge = self.halfedges.items.len;
 
         try self.faces.append(verts);
 
         for (0..3) |j| {
-            const next_he = base_halfedge + ((j + 1) % 3);
-            const he_i = base_halfedge + j;
-            try self.halfedges.append(HalfEdge{
-                .vertex = verts[j],
-                .face = face_id,
-                .next = next_he,
-                .opposite = null,
-            });
-
-            var edge = self.halfedges.getLast();
             const u = verts[j];
             const v = verts[(j + 1) % 3];
+            const w = verts[(j + 2) % 3];
 
-            std.debug.print("{} {}\n", .{ u, v });
-            try self.hemap.putNoClobber(.{ u, v }, he_i);
-            if (self.hemap.get(.{ v, u })) |opp| {
-                edge.opposite = opp;
-                self.halfedges.items[opp].opposite = he_i;
-            }
+            try self.hemap.putNoClobber(.{ u, v }, HalfEdge{
+                .vertex = verts[j],
+                .face = face_id,
+                .next = .{ v, w },
+                .opposite = opp: {
+                    if (self.hemap.getPtr(.{ v, u })) |opp| {
+                        opp.opposite = .{ u, v };
+                        break :opp .{ v, u };
+                    } else {
+                        break :opp null;
+                    }
+                },
+            });
         }
     }
 
-    fn build(allocator: std.mem.Allocator, vertices: std.ArrayList(vec3), faces: []const [3]usize) !Self {
-        const hemap = std.AutoHashMap([2]usize, usize).init(allocator);
-        const halfedges = std.ArrayList(HalfEdge).init(allocator);
-
+    fn build(allocator: std.mem.Allocator, vertices: []const vec3, faces: []const [3]usize) !Self {
+        const hemap = std.AutoHashMap([2]usize, HalfEdge).init(allocator);
         const hefaces = try std.ArrayList(Face).initCapacity(allocator, faces.len);
 
         var r = Self{
             .allocator = allocator,
             .vertices = vertices,
             .faces = hefaces,
-            .halfedges = halfedges,
             .hemap = hemap,
         };
 
@@ -298,31 +289,46 @@ const TriMesh = struct {
 //     }
 // }
 
-pub fn quickhull(allocator: std.mem.Allocator, initial_points: []const vec3) !?Polytope {
-    if (initial_points.len <= 3) {
+fn faceEdges(face: Face) [3][2]usize {
+    return .{
+        .{ face[0], face[1] },
+        .{ face[1], face[2] },
+        .{ face[2], face[0] },
+    };
+}
+
+fn reorderEdgeLoop(edges: [][2]usize) void {
+    for (0..edges.len) |i| {
+        for (i..edges.len) |j| {
+            if (edges[i][1] == edges[j][0] and j != i + 1) {
+                std.mem.swap([2]usize, &edges[i + 1], &edges[j]);
+                break;
+            }
+        }
+        std.debug.assert(edges[i][1] == edges[(i + 1) % edges.len][0]);
+    }
+}
+
+pub fn quickhull(allocator: std.mem.Allocator, points: []const vec3) !?Polytope {
+    if (points.len <= 3) {
         return null;
     }
-
-    var points = std.AutoHashMap(usize, vec3).init(allocator);
-    for (initial_points, 0..) |p, i| {
-        try points.put(i, p);
-    }
-    defer points.deinit();
-
-    var vertices = try std.ArrayList(vec3).initCapacity(allocator, initial_points.len);
+    var outside_points = try std.DynamicBitSet.initFull(allocator, points.len);
+    defer outside_points.deinit();
 
     var polytope = Polytope{ .verts = &.{}, .faces = &.{} };
-    var faces = try std.ArrayList([3]usize).initCapacity(allocator, initial_points.len * 2);
 
+    var mesh: TriMesh = undefined;
     // (1) Find maximum simplex
     {
+        var simplex: [4]usize = undefined;
         simplex_line: {
             inline for (std.meta.fields(Dimension)) |d| {
-                const mini = std.sort.argMin(vec3, initial_points, @field(Dimension, d.name), ltDim).?;
-                const maxi = std.sort.argMax(vec3, initial_points, @field(Dimension, d.name), ltDim).?;
+                const mini = std.sort.argMin(vec3, points, @field(Dimension, d.name), ltDim).?;
+                const maxi = std.sort.argMax(vec3, points, @field(Dimension, d.name), ltDim).?;
                 if (mini != maxi) {
-                    try vertices.append(initial_points[mini]);
-                    try vertices.append(initial_points[maxi]);
+                    simplex[0] = mini;
+                    simplex[1] = maxi;
 
                     break :simplex_line;
                 }
@@ -332,114 +338,139 @@ pub fn quickhull(allocator: std.mem.Allocator, initial_points: []const vec3) !?P
         }
 
         { // find point farthest from line
-            const p = vertices.items[0];
-            const q = vertices.items[1];
+            const p = points[simplex[0]];
+            const q = points[simplex[1]];
             const pq_dir = p.sub(q).normalize();
-            const linedist, const i = argMax2(vec3, initial_points, Line{ .bc_dir = pq_dir, .b = p }, distToLine).?;
+            const linedist, const i = argMax2(vec3, points, Line{ .bc_dir = pq_dir, .b = p }, distToLine).?;
             if (linedist == 0) {
                 // degenerate 1d case
                 return null;
             }
 
-            vertices.appendAssumeCapacity(initial_points[i]);
+            simplex[2] = i;
         }
 
         { // find point farthest from plane
-            const p = vertices.items[0];
-            const q = vertices.items[1];
-            const r = vertices.items[2];
-            const planedist, const i = argMax2(vec3, initial_points, Plane{ .point = p, .normal = triNormal(.{ p, q, r }) }, absPlaneDist).?;
+            const p = points[simplex[0]];
+            const q = points[simplex[1]];
+            const r = points[simplex[2]];
+            const planedist, const i = argMax2(vec3, points, Plane{ .point = p, .normal = triNormal(.{ p, q, r }) }, absPlaneDist).?;
 
             if (planedist == 0) {
                 // degenerate 2d case
                 return null;
             }
 
-            vertices.appendAssumeCapacity(initial_points[i]);
-            // create simplex faces
-            faces.appendSliceAssumeCapacity(&.{
-                .{ 0, 1, 2 },
-                .{ 0, 3, 1 },
-                .{ 0, 2, 3 },
-                .{ 1, 3, 2 },
-            });
+            simplex[3] = i;
         }
+
+        mesh = try TriMesh.build(allocator, try allocator.dupe(vec3, points), &.{
+            .{ 0, 1, 2 },
+            .{ 0, 3, 1 },
+            .{ 0, 2, 3 },
+            .{ 1, 3, 2 },
+        });
     }
+    defer mesh.deinit();
 
     // (2) remove inner points, find max outer points for each face
-    var farthest_from_face = try allocator.alloc(std.meta.Tuple(&.{ f32, usize }), faces.items.len);
+    var farthest_from_face = try allocator.alloc(std.meta.Tuple(&.{ f32, usize }), mesh.faces.items.len);
     defer allocator.free(farthest_from_face);
     @memset(farthest_from_face, .{ 0, 0 });
 
     {
-        var iter = points.iterator();
+        var iter = outside_points.iterator(.{});
 
-        while (iter.next()) |pair| {
-            var j: usize = 0;
+        while (iter.next()) |i| {
+            const point = points[i];
             var outside = false;
-            while (j < faces.items.len) : (j += 1) {
-                const p = vertices.items[faces.items[j][0]];
-                const q = vertices.items[faces.items[j][1]];
-                const r = vertices.items[faces.items[j][2]];
-                const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, pair.value_ptr.*);
+            for (0..mesh.faces.items.len) |j| {
+                const face = mesh.faces.items[j];
+                const p = points[face[0]];
+                const q = points[face[1]];
+                const r = points[face[2]];
+                const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point);
                 if (dist > 0) {
                     outside = true;
                 }
                 if (dist > farthest_from_face[j].@"0") {
-                    farthest_from_face[j] = .{ dist, pair.key_ptr.* };
+                    farthest_from_face[j] = .{ dist, i };
                 }
             }
             if (!outside) {
-                rl.drawSphere(@bitCast(pair.value_ptr.*), 0.1, rl.Color.gray);
-                _ = points.remove(pair.key_ptr.*);
+                rl.drawSphere(@bitCast(point), 0.1, rl.Color.gray);
+                outside_points.unset(i);
             }
         }
     }
-
-    var mesh = try TriMesh.build(allocator, vertices, faces.items);
-    defer mesh.deinit();
 
     std.debug.print("built mesh\n", .{});
 
     // (3) expand to farthest point for each face
-    for (farthest_from_face) |f| {
-        const dist, const vert_key = f;
-        const vert = points.get(vert_key).?;
+    for (farthest_from_face, 0..) |f, fi| {
+        const dist, const farthest_point_i = f;
+        const farthest_point = points[farthest_point_i];
         if (dist > 0) {
-            const nfaces = mesh.faces.items.len;
-            for (0..nfaces) |face_i| {
-                const face = &mesh.faces.items[face_i];
-                // skip tombstones
-                if (face[0] == 0 and face[1] == 0 and face[2] == 0) {
-                    continue;
+            var edgeloop = std.ArrayList([2]usize).init(allocator);
+            defer edgeloop.deinit();
+
+            var horizon_facet = std.ArrayList(usize).init(allocator);
+            try horizon_facet.append(fi);
+            defer horizon_facet.deinit();
+
+            @import("debug.zig").debugMesh(@ptrCast(mesh.vertices), mesh.faces.items);
+            var fjj: usize = 0;
+            while (fjj < horizon_facet.items.len) : (fjj += 1) {
+                const fj = horizon_facet.items[fjj];
+                for (faceEdges(mesh.faces.items[fj])) |edge| {
+                    const a, const b = edge;
+                    if (mesh.hemap.get(.{ b, a })) |opp_he| {
+                        const already_visited = std.mem.indexOf(usize, horizon_facet.items, &.{opp_he.face}) != null;
+                        if (!already_visited) {
+                            const face = mesh.faces.items[opp_he.face];
+                            const p1 = points[face[0]];
+                            const p2 = points[face[1]];
+                            const p3 = points[face[2]];
+                            const norm = triNormal(.{ p1, p2, p3 });
+                            if (norm.dot(farthest_point.sub(p1)) > 0) {
+                                // face is visible from point
+                                try horizon_facet.append(opp_he.face);
+                            } else {
+                                // not visible from point, so the edge we crossed is a horizon edge
+                                try edgeloop.append(edge);
+                            }
+                        }
+                    }
                 }
-                const p = mesh.vertices.items[face[0]];
-                const q = mesh.vertices.items[face[1]];
-                const r = mesh.vertices.items[face[2]];
-                const norm = triNormal(.{ p, q, r });
-                if (norm.dot(vert.sub(p)) > 0) {
-                    // mark face as deleted
-                    const u, const v, const w = face.*;
 
-                    _ = mesh.hemap.remove(.{ u, v });
-                    _ = mesh.hemap.remove(.{ v, w });
-                    _ = mesh.hemap.remove(.{ w, u });
-
-                    face.* = .{ 0, 0, 0 };
-
-                    try mesh.vertices.append(vert);
-                    try mesh.addFace(.{ u, v, mesh.vertices.items.len - 1 });
-                    try mesh.addFace(.{ v, w, mesh.vertices.items.len - 1 });
-                    try mesh.addFace(.{ w, u, mesh.vertices.items.len - 1 });
-                }
+                @import("debug.zig").highlightFace(fj);
             }
 
-            rl.drawSphere(@bitCast(vert), 0.4, rl.Color.red);
+            reorderEdgeLoop(edgeloop.items);
+            for (horizon_facet.items) |face| {
+                for (faceEdges(mesh.faces.items[face])) |edge| {
+                    _ = mesh.hemap.remove(edge);
+                }
+                mesh.faces.items[face] = .{ 0, 0, 0 };
+                //maybe??
+                //farthest_from_face[face].@"1" = 0;
+            }
+
+            for (edgeloop.items) |edge| {
+                try mesh.addFace(.{ edge[0], edge[1], farthest_point_i });
+            }
+
+            if (@import("debug.zig").isDebugIter()) {
+                std.debug.print("{any}\n", .{horizon_facet.items});
+                rl.drawSphere(@bitCast(farthest_point), 0.4, rl.Color.red);
+            }
         }
     }
 
+    @import("debug.zig").debugMesh(@ptrCast(mesh.vertices), mesh.faces.items);
+
     // (4) return result
-    polytope.verts = try mesh.vertices.toOwnedSlice();
+    polytope.verts = mesh.vertices;
     polytope.faces = try mesh.faces.toOwnedSlice();
     return polytope;
 }
