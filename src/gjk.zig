@@ -206,6 +206,7 @@ const TriMesh = struct {
     }
 
     fn addFace(self: *Self, verts: [3]usize) !void {
+        std.debug.assert(verts[0] != verts[1] and verts[1] != verts[2] and verts[0] != verts[2]);
         std.debug.assert(new_face: {
             for (self.faces.items, 0..) |face, i| {
                 if (std.meta.eql(face, verts)) {
@@ -230,6 +231,7 @@ const TriMesh = struct {
                 .next = .{ v, w },
                 .opposite = opp: {
                     if (self.hemap.getPtr(.{ v, u })) |opp| {
+                        std.debug.assert(opp.face != face_id);
                         opp.opposite = .{ u, v };
                         break :opp .{ v, u };
                     } else {
@@ -257,37 +259,6 @@ const TriMesh = struct {
         return r;
     }
 };
-
-// fn computeHalfEdges(faces: [][3]usize) void {
-//     std.debug.assert(verts: {
-//         var m = 0;
-//         for (faces) |face| {
-//             for (face) |i| {
-//                 m = @max(m, i);
-//             }
-//         }
-//         break :verts m + 1;
-//     } == out.len);
-//
-//     for (faces, 0..) |face, face_i| {
-//         for (.{ .{ face[0], face[1] }, .{ face[1], face[2] }, .{ face[2], face[0] } }) |edge| {
-//             const u, const v = edge;
-//             const next_i = face[(face_vert - 1) % 3];
-//             for (faces, 0..) |f, j| {
-//                 if ((f[0] == next_i and f[1] == i) or
-//                     (f[1] == next_i and f[2] == i) or
-//                     (f[2] == next_i and f[0] == i))
-//                 {}
-//             }
-//             half_edges[i] = HalfEdge{
-//                 .vertex = i,
-//                 .face = face_i,
-//                 .next = next_i,
-//                 .opposite = null,
-//             };
-//         }
-//     }
-// }
 
 fn faceEdges(face: Face) [3][2]usize {
     return .{
@@ -373,96 +344,100 @@ pub fn quickhull(allocator: std.mem.Allocator, points: []const vec3) !?Polytope 
     }
     defer mesh.deinit();
 
-    // (2) remove inner points, find max outer points for each face
-    var farthest_from_face = try allocator.alloc(std.meta.Tuple(&.{ f32, usize }), mesh.faces.items.len);
-    defer allocator.free(farthest_from_face);
-    @memset(farthest_from_face, .{ 0, 0 });
+    while (outside_points.count() > 0) {
+        // (2) remove inner points, find max outer points for each face
+        var farthest_from_face = try allocator.alloc(std.meta.Tuple(&.{ f32, usize }), mesh.faces.items.len);
+        defer allocator.free(farthest_from_face);
+        @memset(farthest_from_face, .{ 0, 0 });
 
-    {
-        var iter = outside_points.iterator(.{});
+        {
+            var iter = outside_points.iterator(.{});
 
-        while (iter.next()) |i| {
-            const point = points[i];
-            var outside = false;
-            for (0..mesh.faces.items.len) |j| {
-                const face = mesh.faces.items[j];
-                const p = points[face[0]];
-                const q = points[face[1]];
-                const r = points[face[2]];
-                const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point);
-                if (dist > 0) {
-                    outside = true;
+            while (iter.next()) |i| {
+                const point = points[i];
+                var outside = false;
+                for (0..mesh.faces.items.len) |j| {
+                    const face = mesh.faces.items[j];
+                    const p = points[face[0]];
+                    const q = points[face[1]];
+                    const r = points[face[2]];
+                    const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point);
+                    if (dist > 0) {
+                        outside = true;
+                    }
+                    if (dist > farthest_from_face[j].@"0") {
+                        farthest_from_face[j] = .{ dist, i };
+                    }
                 }
-                if (dist > farthest_from_face[j].@"0") {
-                    farthest_from_face[j] = .{ dist, i };
+                if (!outside) {
+                    rl.drawSphere(@bitCast(point), 0.1, rl.Color.gray);
+                    outside_points.unset(i);
                 }
-            }
-            if (!outside) {
-                rl.drawSphere(@bitCast(point), 0.1, rl.Color.gray);
-                outside_points.unset(i);
             }
         }
-    }
 
-    std.debug.print("built mesh\n", .{});
+        std.debug.print("built mesh\n", .{});
 
-    // (3) expand to farthest point for each face
-    for (farthest_from_face, 0..) |f, fi| {
-        const dist, const farthest_point_i = f;
-        const farthest_point = points[farthest_point_i];
-        if (dist > 0) {
-            var edgeloop = std.ArrayList([2]usize).init(allocator);
-            defer edgeloop.deinit();
+        // (3) expand to farthest point for each face
+        for (farthest_from_face, 0..) |f, fi| {
+            const dist, const farthest_point_i = f;
+            const farthest_point = points[farthest_point_i];
+            if (dist > 0) {
+                var edgeloop = std.ArrayList([2]usize).init(allocator);
+                defer edgeloop.deinit();
 
-            var horizon_facet = std.ArrayList(usize).init(allocator);
-            try horizon_facet.append(fi);
-            defer horizon_facet.deinit();
+                var horizon_facet = std.ArrayList(usize).init(allocator);
+                try horizon_facet.append(fi);
+                defer horizon_facet.deinit();
 
-            @import("debug.zig").debugMesh(@ptrCast(mesh.vertices), mesh.faces.items);
-            var fjj: usize = 0;
-            while (fjj < horizon_facet.items.len) : (fjj += 1) {
-                const fj = horizon_facet.items[fjj];
-                for (faceEdges(mesh.faces.items[fj])) |edge| {
-                    const a, const b = edge;
-                    if (mesh.hemap.get(.{ b, a })) |opp_he| {
-                        const already_visited = std.mem.indexOf(usize, horizon_facet.items, &.{opp_he.face}) != null;
-                        if (!already_visited) {
-                            const face = mesh.faces.items[opp_he.face];
-                            const p1 = points[face[0]];
-                            const p2 = points[face[1]];
-                            const p3 = points[face[2]];
-                            const norm = triNormal(.{ p1, p2, p3 });
-                            if (norm.dot(farthest_point.sub(p1)) > 0) {
-                                // face is visible from point
-                                try horizon_facet.append(opp_he.face);
-                            } else {
-                                // not visible from point, so the edge we crossed is a horizon edge
-                                try edgeloop.append(edge);
+                @import("debug.zig").debugMesh(@ptrCast(mesh.vertices), mesh.faces.items);
+                var fjj: usize = 0;
+                while (fjj < horizon_facet.items.len) : (fjj += 1) {
+                    const fj = horizon_facet.items[fjj];
+                    for (faceEdges(mesh.faces.items[fj])) |edge| {
+                        const a, const b = edge;
+                        if (mesh.hemap.get(.{ b, a })) |opp_he| {
+                            const already_visited = std.mem.indexOf(usize, horizon_facet.items, &.{opp_he.face}) != null;
+                            if (!already_visited) {
+                                const face = mesh.faces.items[opp_he.face];
+                                const p1 = points[face[0]];
+                                const p2 = points[face[1]];
+                                const p3 = points[face[2]];
+                                const norm = triNormal(.{ p1, p2, p3 });
+                                if (norm.dot(farthest_point.sub(p1)) > 0) {
+                                    // face is visible from point
+                                    try horizon_facet.append(opp_he.face);
+                                } else {
+                                    // not visible from point, so the edge we crossed is a horizon edge
+                                    try edgeloop.append(edge);
+                                }
                             }
                         }
                     }
+
+                    @import("debug.zig").highlightFace(fj);
                 }
 
-                @import("debug.zig").highlightFace(fj);
-            }
-
-            reorderEdgeLoop(edgeloop.items);
-            for (horizon_facet.items) |face| {
-                for (faceEdges(mesh.faces.items[face])) |edge| {
-                    _ = mesh.hemap.remove(edge);
+                reorderEdgeLoop(edgeloop.items);
+                for (horizon_facet.items) |face| {
+                    for (faceEdges(mesh.faces.items[face])) |edge| {
+                        _ = mesh.hemap.remove(edge);
+                    }
+                    mesh.faces.items[face] = .{ 0, 0, 0 };
+                    // not sure if this is needed??
+                    if (face < farthest_from_face.len) {
+                        farthest_from_face[face].@"0" = 0;
+                    }
                 }
-                mesh.faces.items[face] = .{ 0, 0, 0 };
-                //maybe??
-                //farthest_from_face[face].@"1" = 0;
-            }
 
-            for (edgeloop.items) |edge| {
-                try mesh.addFace(.{ edge[0], edge[1], farthest_point_i });
-            }
+                for (edgeloop.items) |edge| {
+                    try mesh.addFace(.{ edge[0], edge[1], farthest_point_i });
+                }
 
-            if (@import("debug.zig").isDebugIter()) {
-                std.debug.print("{any}\n", .{horizon_facet.items});
-                rl.drawSphere(@bitCast(farthest_point), 0.4, rl.Color.red);
+                if (@import("debug.zig").isDebugIter()) {
+                    std.debug.print("{any}\n", .{horizon_facet.items});
+                    rl.drawSphere(@bitCast(farthest_point), 0.4, rl.Color.red);
+                }
             }
         }
     }

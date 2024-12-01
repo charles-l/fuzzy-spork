@@ -17,6 +17,7 @@
             python-pkgs.hypothesis
             python-pkgs.pytest
             python-pkgs.numpy
+            python-pkgs.raylib-python-cffi
           ]))
         ];
 

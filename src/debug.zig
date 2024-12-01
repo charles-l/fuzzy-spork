@@ -9,6 +9,8 @@ var ctx = struct {
     faces: std.BoundedArray([3]usize, max_faces) = .{ .len = 0 },
     verts: std.BoundedArray([3]f32, 1000) = .{ .len = 0 },
     highlight: std.StaticBitSet(max_faces) = std.StaticBitSet(max_faces).initEmpty(),
+    // log file
+    file: ?std.fs.File = null,
 }{};
 
 pub fn debugDraw() void {
@@ -47,7 +49,26 @@ pub fn debugDraw() void {
     }
 }
 
+fn log(comptime T: type, writer: std.fs.File.Writer, prefix: []const u8, data: []const T) !void {
+    _ = try writer.write(prefix);
+    try writer.writeByte(':');
+    try writer.writeInt(u32, @intCast(@sizeOf(T)), .little);
+    try writer.writeInt(u32, @intCast(data.len), .little);
+    for (data) |d| {
+        const bytes: [@sizeOf(T)]u8 = @bitCast(d);
+        _ = try writer.write(&bytes);
+    }
+}
+
 pub fn debugMesh(verts: []const [3]f32, faces: []const [3]usize) void {
+    if (ctx.file == null) {
+        ctx.file = std.fs.cwd().createFile("log.txt", .{ .truncate = true, .read = true }) catch @panic("couldn't create log file");
+    }
+    const writer = ctx.file.?.writer();
+    log([3]f32, writer, "verts", verts) catch @panic("log verts");
+    std.debug.print("faces={any}\n", .{faces});
+    log([3]usize, writer, "faces", faces) catch @panic("log faces");
+
     ctx.steps += 1;
     if (!isDebugIter()) {
         return;
