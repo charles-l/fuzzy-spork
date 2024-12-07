@@ -361,7 +361,9 @@ pub fn quickhull(allocator: std.mem.Allocator, points: []const vec3) !?Polytope 
                     const p = points[face[0]];
                     const q = points[face[1]];
                     const r = points[face[2]];
-                    const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point);
+                    // TODO: figure out a sensible epsilon
+                    const fudge_factor = -0.001;
+                    const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point) + fudge_factor;
                     if (dist > 0) {
                         outside = true;
                     }

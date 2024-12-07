@@ -66,7 +66,6 @@ pub fn debugMesh(verts: []const [3]f32, faces: []const [3]usize) void {
     }
     const writer = ctx.file.?.writer();
     log([3]f32, writer, "verts", verts) catch @panic("log verts");
-    std.debug.print("faces={any}\n", .{faces});
     log([3]usize, writer, "faces", faces) catch @panic("log faces");
 
     ctx.steps += 1;

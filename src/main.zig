@@ -145,7 +145,8 @@ pub fn main() anyerror!void {
         .projection = rl.CameraProjection.camera_perspective,
     };
 
-    var rnd = std.rand.DefaultPrng.init(1);
+    const seed = 4;
+    var rnd = std.rand.DefaultPrng.init(seed);
     const random_points = lbl: {
         var r: [20]vec3 = undefined;
 
