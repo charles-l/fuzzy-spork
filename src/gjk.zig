@@ -361,9 +361,7 @@ pub fn quickhull(allocator: std.mem.Allocator, points: []const vec3) !?Polytope 
                     const p = points[face[0]];
                     const q = points[face[1]];
                     const r = points[face[2]];
-                    // TODO: figure out a sensible epsilon
-                    const fudge_factor = -0.001;
-                    const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point) + fudge_factor;
+                    const dist = planeDist(.{ .point = p, .normal = triNormal(.{ p, q, r }) }, point);
                     if (dist > 0) {
                         outside = true;
                     }
@@ -432,7 +430,12 @@ pub fn quickhull(allocator: std.mem.Allocator, points: []const vec3) !?Polytope 
                     }
                 }
 
+                // remove far point from candidate pool of outside points for future iters
+                outside_points.unset(farthest_point_i);
                 for (edgeloop.items) |edge| {
+                    // remove edge from candidate pool
+                    outside_points.unset(edge[0]);
+                    outside_points.unset(edge[1]);
                     try mesh.addFace(.{ edge[0], edge[1], farthest_point_i });
                 }
 

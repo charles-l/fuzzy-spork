@@ -62,7 +62,7 @@ fn log(comptime T: type, writer: std.fs.File.Writer, prefix: []const u8, data: [
 
 pub fn debugMesh(verts: []const [3]f32, faces: []const [3]usize) void {
     if (ctx.file == null) {
-        ctx.file = std.fs.cwd().createFile("log.txt", .{ .truncate = true, .read = true }) catch @panic("couldn't create log file");
+        ctx.file = std.fs.createFileAbsolute("/tmp/log.txt", .{ .truncate = true, .read = true }) catch @panic("couldn't create log file");
     }
     const writer = ctx.file.?.writer();
     log([3]f32, writer, "verts", verts) catch @panic("log verts");
